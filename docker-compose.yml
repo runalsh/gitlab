@@ -1,0 +1,254 @@
+networks:
+  gitlab_network:
+    driver: 'bridge'
+
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:17.3.0-ce.0
+    container_name: gitlab
+    hostname: gitlab
+    privileged: true
+    environment:
+      TZ: Europe/Moscow
+      GITLAB_OMNIBUS_CONFIG: |
+          external_url 'http://gitlab:80'
+          registry_external_url 'http://registry:5000'
+          gitlab_rails['registry_enabled'] = false
+          registry['enable'] = false
+          letsencrypt['enable'] = false 
+          gitlab_rails['time_zone'] = 'Europe/Moscow'
+
+          gitlab_rails['packages_enabled'] = false
+          gitlab_rails['dependency_proxy_enabled'] = false
+          gitlab_pages['enable'] = false
+          pages_nginx['enable'] = false
+          gitlab_rails['usage_ping_enabled'] = false
+          gitlab_rails['smtp_enable'] = false
+          gitlab_rails['gitlab_email_enabled'] = false
+          gitlab_rails['incoming_email_enabled'] = false
+          gitlab_kas['enable'] = false
+          gitlab_rails['gitlab_kas_enabled'] = false
+          gitlab_rails['terraform_state_enabled'] = false
+          gitlab_rails['kerberos_enabled'] = false
+          gitlab_ci['gitlab_ci_all_broken_builds'] = false
+          gitlab_ci['gitlab_ci_add_pusher'] = false
+          sentinel['enable'] = false
+          puma['worker_processes'] = 0
+          puma['min_threads'] = 1
+          puma['max_threads'] = 2
+          sidekiq['concurrency'] = 5
+          gitlab_rails['sentry_enabled'] = false
+          prometheus_monitoring['enable'] = false
+          sidekiq['metrics_enabled'] = false
+          monitoring_role['enable'] = false
+          prometheus['enable'] = false
+          alertmanager['enable'] = false
+          node_exporter['enable'] = false
+          redis_exporter['enable'] = false
+          postgres_exporter['enable'] = false
+          pgbouncer_exporter['enable'] = false
+          gitlab_exporter['enable'] = false
+
+          logging['logrotate_frequency'] = "daily" # rotate logs daily
+          logging['logrotate_size'] = nil # do not rotate by size by default
+          logging['logrotate_rotate'] = 30 # keep 30 rotated logs
+          logging['logrotate_compress'] = "compress" # see 'man logrotate'
+          logging['logrotate_method'] = "copytruncate" # see 'man logrotate'
+          logging['logrotate_postrotate'] = nil # no postrotate command by default
+          logging['logrotate_dateformat'] = nil # use date extensions for rotated files rather than numbers e.g. a value of "-%Y-%m-%d" would give rotated files
+    ports:
+      - "22:22"
+      - "80:80"
+      - "443:443"
+    volumes:
+      - './data/gitlab/config:/etc/gitlab'
+      - './data/gitlab/logs:/var/log/gitlab'
+      - './data/gitlab/data:/var/opt/gitlab'  
+    networks:
+      - gitlab_network
+    healthcheck:
+      test: curl --fail http://gitlab:80/users/sign_in || exit 1
+      interval: 30s
+      timeout: 3s
+      retries: 10  
+
+  gitlab-runner:
+    image: gitlab/gitlab-runner:v17.3.0 # v17.3.0 alpine-v17.3.0
+    container_name: gitlab-runner
+    hostname: gitlab-runner
+    environment:
+      TZ: Europe/Moscow
+      # REGISTRATION_TOKEN: RunnerToken
+      # REGISTER_NON_INTERACTIVE: "true"
+      # CI_SERVER_URL: http://gitlab:80
+      # RUNNER_NAME: gitlab-runner
+      # RUNNER_EXECUTOR: docker
+      # DOCKER_IMAGE: docker:dind
+      DOCKER_PRIVILEGED: "true"
+      # DOCKER_OPTS: "--insecure-registry registry:5000 --insecure-registry registry-dockerio:5001"
+    volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+    - ./data/gitlab-runner:/etc/gitlab-runner
+    deploy:
+      mode: replicated
+      replicas: 1
+    entrypoint: [""]
+    command: [
+        "/bin/sh",
+        "-c",
+        "gitlab-runner unregister --all-runners && gitlab-runner register \
+        --non-interactive \
+        --url 'http://gitlab:80' \
+        --registration-token 'RunnerToken' \
+        --executor 'docker' \
+        --docker-image 'docker:dind' \
+        --docker-network-mode gitlab_gitlab_network \
+        && gitlab-runner run --user=gitlab-runner --working-directory=/etc/gitlab-runner",
+      ]
+    depends_on:
+      gitlab:
+        condition: service_healthy  
+    networks:
+      - gitlab_network
+
+# pulling to local registry from public "docker pull localhost:5000/library/nginx:alpine"
+# for delete unused layers "docker exec -it registry registry garbage-collect /etc/docker/registry/config.yml"
+  registry:
+    container_name: registry
+    restart: unless-stopped
+    hostname: registry  
+    image: registry:2.8.3
+    ports:
+      - 5000:5000
+    volumes:
+      - ./data/registry/data:/var/lib/registry 
+      - ./data/registry/certs:/certs
+      - ./.htpasswd:/etc/docker/registry/.htpasswd:ro
+      - ./registry.yml:/etc/docker/registry/config.yml:ro
+    environment:
+      - TZ=Europe/Moscow
+      - REGISTRY_STORAGE_DELETE_ENABLED=true
+      - REGISTRY_AUTH=htpasswd
+      - REGISTRY_AUTH_HTPASSWD_PATH=/etc/docker/registry/.htpasswd
+      - REGISTRY_AUTH_HTPASSWD_REALM=Registry Realm
+      # - REGISTRY_HTTP_TLS_CERTIFICATE=/certs/domain.crt
+      # - REGISTRY_HTTP_TLS_KEY=/certs/domain.key
+    networks:
+      - gitlab_network
+    healthcheck:
+      test: curl --fail http://registry:5000 || exit 1
+      interval: 10s
+      timeout: 3s
+      retries: 10    
+      
+  registry-ui:
+    container_name: registry-ui
+    image: joxit/docker-registry-ui:2.5.7
+    restart: unless-stopped
+    ports:
+      - 8080:80
+    volumes:
+      - ./htpasswd:/etc/nginx/.htpasswd:ro
+      # - ./registry-ui.nginx.conf:/etc/nginx/conf.d/default.conf
+    environment:
+      - TZ=Europe/Moscow
+      - SINGLE_REGISTRY=false
+      - REGISTRY_TITLE=Docker Registry UI
+      - DELETE_IMAGES=true
+      - SHOW_CONTENT_DIGEST=true
+      - NGINX_PROXY_PASS_URL=http://localhost:5000
+      - DEFAULT_REGISTRIES=http://localhost:5000,http://docker:docker@localhost:5000,http://docker:docker@localhost:5001
+      - SHOW_CATALOG_NB_TAGS=true
+      - CATALOG_MIN_BRANCHES=1
+      - CATALOG_MAX_BRANCHES=1
+      - TAGLIST_PAGE_SIZE=100
+      - REGISTRY_SECURED=false
+      - CATALOG_ELEMENTS_LIMIT=1000
+      - REGISTRY_ALLOW_DELETE=true
+      - USE_CONTROL_CACHE_HEADER=true
+      - THEME=dark
+    networks:
+      - gitlab_network  
+    depends_on:
+      - registry
+
+# pulling to local registry from public "docker pull localhost:5001/library/nginx:alpine"
+# pulling to local registry from private docker "pull localhost:5001/runalsh/nginx:deb-1.27.0"
+# for delete unused layers "docker exec -it registry-dockerio registry garbage-collect /etc/docker/registry/config.yml"
+# you should put your username and password in registry-dockerio.yml proxy.username and proxy.password
+  registry-dockerio:
+    container_name: registry-dockerio
+    restart: unless-stopped
+    hostname: registry-dockerio  
+    image: registry:2.8.3
+    ports:
+      - 5001:5000
+    volumes:
+      - ./data/registry-dockerio/data:/var/lib/registry 
+      - ./data/registry-dockerio/certs:/certs
+      - ./.htpasswd:/etc/docker/registry/.htpasswd:ro
+      - ./registry-dockerio.yml:/etc/docker/registry/config.yml:ro
+    environment:
+      - TZ=Europe/Moscow
+      - REGISTRY_STORAGE_DELETE_ENABLED=true
+      - REGISTRY_AUTH=htpasswd
+      - REGISTRY_AUTH_HTPASSWD_PATH=/etc/docker/registry/.htpasswd
+      - REGISTRY_AUTH_HTPASSWD_REALM=Registry Realm
+      # - REGISTRY_HTTP_TLS_CERTIFICATE=/certs/domain.crt
+      # - REGISTRY_HTTP_TLS_KEY=/certs/domain.key
+    networks:
+      - gitlab_network
+    healthcheck:
+      test: curl --fail http://registry-dockerio:5000 || exit 1
+      interval: 10s
+      timeout: 3s
+      retries: 10 
+
+  vault:
+    image: vault:1.13.3 # s.q1gaeWuVqxtqL2KBC4SMBEbW  uQ6OZvYqlgecKqHjpMOM1tYMurdgoSF4Nc/PydxUZiA=
+    container_name: vault
+    hostname: vault
+    ports:
+      - 8200:8200
+    volumes:
+      - ./data/vault/config:/vault/config
+      - ./data/vault/policies:/vault/policies
+      - ./data/vault/data:/vault/data
+      - ./data/vault/logs:/vault/logs
+    environment:
+    - VAULT_ADDR=http://127.0.0.1:8200
+    - VAULT_LOCAL_CONFIG={"backend":{"consul":{"address":"http://consul:8500","path":"vault/"}},"listener":{"tcp":{"address":"0.0.0.0:8200","tls_disable":1}},"ui":true, "disable_mlock":true}
+    command: server
+    cap_add:
+      - IPC_LOCK
+    networks:
+      - gitlab_network  
+    depends_on:
+      - consul
+
+  consul:
+    image: consul:1.15.4
+    container_name: consul
+    restart: unless-stopped
+    hostname: consul
+    ports:
+      - 8500:8500
+    command: agent -server -bind 0.0.0.0 -bootstrap-expect 1  -client 0.0.0.0 -config-file=/consul/config/config.json 
+    volumes:
+      - ./consul.json:/consul/config/config.json
+      - ./data/consul/data:/consul/data
+    networks:
+      - gitlab_network  
+
+  consul-worker:
+    image: consul:1.15.4
+    container_name: consul-worker
+    restart: unless-stopped
+    hostname: consul-worker
+    command: agent -server -join consul -config-file=/consul/config/config.json
+    volumes:
+      - ./consul.json:/consul/config/config.json
+    networks:
+      - gitlab_network  
+    depends_on:
+      - consul

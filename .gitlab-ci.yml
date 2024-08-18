@@ -1,0 +1,44 @@
+default:
+  image: docker:dind
+  services:
+    - name: docker:dind
+      command: ["--tls=false", "--insecure-registry=registry:5000", "--insecure-registry=registry-dockerio:5001"]
+      alias: docker
+variables:
+  DOCKER_HOST: tcp://docker:2375
+  DOCKER_TLS_CERTDIR: ""  
+  CI_REGISTRY: registry:5000
+  CI_REGISTRY_IMAGE: test
+  CI_REGISTRY_USER: docker
+  CI_REGISTRY_PASSWORD: docker
+
+stages:
+  - build
+  - test
+  - deploy
+  
+build-job-example:
+  stage: build
+  script:
+    - test -s Dockerfile
+    - echo $CI_REGISTRY_USER $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - echo "Login $CI_REGISTRY"
+    # - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN gitlab:5000
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    - echo "Build the image $IMAGE"
+    - docker build -t $CI_REGISTRY/$CI_REGISTRY_IMAGE:$(date "+%Y-%m-%d-%H-%M-%S") .
+    - echo "Push the image $IMAGE"
+    - docker push --all-tags $CI_REGISTRY/$CI_REGISTRY_IMAGE 
+    - echo "Logout $CI_REGISTRY"
+    - docker logout $CI_REGISTRY
+
+
+test-job-example:
+  stage: test
+  script:
+    - echo "Testing the 'Hello World' app"
+
+deploy-job-example:
+  stage: deploy
+  script:
+    - echo "Deploying the 'Hello World' app"    
