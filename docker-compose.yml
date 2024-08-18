@@ -19,7 +19,9 @@ services:
           letsencrypt['enable'] = false 
           gitlab_rails['time_zone'] = 'Europe/Moscow'
 
-          postgresql['max_wal_size'] = "2MB"
+          postgresql['min_wal_size'] = "80MB"
+          postgresql['max_wal_size'] = "80MB"
+          postgresql['wal_keep_segments'] = 1
           gitlab_rails['packages_enabled'] = false
           gitlab_rails['dependency_proxy_enabled'] = false
           gitlab_pages['enable'] = false
