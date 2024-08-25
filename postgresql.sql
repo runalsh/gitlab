@@ -1,0 +1,6 @@
+CREATE USER gitlab WITH PASSWORD 'gitlab';
+CREATE USER sonarqube WITH PASSWORD 'sonarqube';
+CREATE DATABASE gitlab OWNER gitlab;
+CREATE DATABASE sonarqube OWNER sonarqube;
+GRANT ALL PRIVILEGES ON DATABASE gitlab TO postgres;
+GRANT ALL PRIVILEGES ON DATABASE sonarqube TO postgres;

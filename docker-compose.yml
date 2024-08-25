@@ -10,18 +10,38 @@ services:
     privileged: true
     environment:
       TZ: Europe/Moscow
-      GITLAB_LOG_LEVEL: ERROR
       GITLAB_OMNIBUS_CONFIG: |
           external_url 'http://gitlab:80'
           registry_external_url 'http://registry:5000'
-          gitlab_rails['registry_enabled'] = false
           registry['enable'] = false
           letsencrypt['enable'] = false 
+          letsencrypt['auto_renew'] = false
           gitlab_rails['time_zone'] = 'Europe/Moscow'
-
+          gitlab_rails['registry_enabled'] = false
+          gitlab_rails['initial_root_password'] = 'runalshrunalsh'
+          gitlab_rails['initial_shared_runners_registration_token'] = "RunnerToken"
+          
+          nginx['listen_port'] = 80
+          nginx['listen_https'] = false
+          nginx['redirect_http_to_https'] = false
+          # nginx['real_ip_trusted_addresses'] = [ '10.0.0.0/8', '192.168.0.0/16', '172.16.0.0/12', 'fd00::/8' ]
+          nginx['real_ip_header'] = 'X-Forwarded-For'
+          nginx['real_ip_recursive'] = 'on'
+        
+          # Disable the built-in Postgres
+          postgresql['enable'] = false
           postgresql['min_wal_size'] = "80MB"
           postgresql['max_wal_size'] = "80MB"
           postgresql['wal_keep_segments'] = 1
+          # Fill in the connection details
+          gitlab_rails['db_adapter'] = 'postgresql'
+          gitlab_rails['db_encoding'] = 'utf8'
+          gitlab_rails['db_host'] = 'postgresql'
+          gitlab_rails['db_port'] = 5432
+          gitlab_rails['db_database'] = "gitlab"
+          gitlab_rails['db_username'] = 'gitlab'
+          gitlab_rails['db_password'] = 'gitlab'
+
           gitlab_rails['packages_enabled'] = false
           gitlab_rails['dependency_proxy_enabled'] = false
           gitlab_pages['enable'] = false
@@ -53,6 +73,7 @@ services:
           pgbouncer_exporter['enable'] = false
           gitlab_exporter['enable'] = false
 
+          nginx['error_log_level'] = "error"
           logging['svlogd_size'] = 1 * 1024 * 1024 # 1mb
           logging['logrotate_frequency'] = "daily" # rotate logs daily
           logging['logrotate_size'] = nil # do not rotate by size by default
@@ -71,15 +92,17 @@ services:
       - './data/gitlab/data:/var/opt/gitlab'  
     networks:
       - gitlab_network
+    depends_on:
+      - postgresql  
     healthcheck:
       test: curl --fail http://gitlab:80/users/sign_in || exit 1
       interval: 30s
       timeout: 3s
-      retries: 10  
+      retries: 20  
 
   gitlab-runner:
-    image: gitlab/gitlab-runner:v17.3.0 # v17.3.0 alpine-v17.3.0
-    container_name: gitlab-runner
+    image: gitlab/gitlab-runner:alpine-v17.3.0 # v17.3.0 alpine-v17.3.0
+    # container_name: gitlab-runner
     hostname: gitlab-runner
     environment:
       TZ: Europe/Moscow
@@ -128,7 +151,7 @@ services:
     volumes:
       - ./data/registry/data:/var/lib/registry 
       - ./data/registry/certs:/certs
-      - ./.htpasswd:/etc/docker/registry/.htpasswd:ro
+      - .htpasswd:/etc/docker/registry/.htpasswd:ro
       - ./registry.yml:/etc/docker/registry/config.yml:ro
     environment:
       - TZ=Europe/Moscow
@@ -146,6 +169,33 @@ services:
       timeout: 3s
       retries: 10    
       
+  # docker-registry-browser:
+  #   image: klausmeyer/docker-registry-browser:1.7.3
+  #   container_name: docker-registry-browser
+  #   hostname: docker-registry-browse  
+  #   restart: unless-stopped
+  #   environment:
+  #     - "DOCKER_REGISTRY_URL=http://registry:5000"
+  #     - "ENABLE_DELETE_IMAGES=true"
+  #     - "PUBLIC_REGISTRY_URL=docker-registry.example.com"
+  #     # Subfolder
+  #     - "SCRIPT_NAME=/browser"
+  #     - "RAILS_RELATIVE_URL_ROOT=/browser"
+  #     # docker-registry auth cred.
+  #     - "BASIC_AUTH_USER=docker"
+  #     - "BASIC_AUTH_PASSWORD=passw0rd"
+  #   ports:
+  #     - "8081:8080"
+  #   depends_on:
+  #     - registry
+  #   healthcheck:
+  #     test:  wget --quiet --tries=1 --spider http://127.0.0.1:8080/ping || exit 1
+  #     interval: 60s
+  #     timeout: 5s
+  #     retries: 3
+  #   networks:
+  #     - gitlab_network  
+
   registry-ui:
     container_name: registry-ui
     image: joxit/docker-registry-ui:2.5.7
@@ -177,40 +227,92 @@ services:
     depends_on:
       - registry
 
-# pulling to local registry from public "docker pull localhost:5001/library/nginx:alpine"
-# pulling to local registry from private docker "pull localhost:5001/runalsh/nginx:deb-1.27.0"
-# for delete unused layers "docker exec -it registry-dockerio registry garbage-collect /etc/docker/registry/config.yml"
-# you should put your username and password in registry-dockerio.yml proxy.username and proxy.password
-  registry-dockerio:
-    container_name: registry-dockerio
-    restart: unless-stopped
-    hostname: registry-dockerio  
-    image: registry:2.8.3
-    ports:
-      - 5001:5000
-    volumes:
-      - ./data/registry-dockerio/data:/var/lib/registry 
-      - ./data/registry-dockerio/certs:/certs
-      - ./.htpasswd:/etc/docker/registry/.htpasswd:ro
-      - ./registry-dockerio.yml:/etc/docker/registry/config.yml:ro
+# # pulling to local registry from public "docker pull localhost:5001/library/nginx:alpine"
+# # pulling to local registry from private docker "pull localhost:5001/runalsh/nginx:deb-1.27.0"
+# # for delete unused layers "docker exec -it registry-dockerio registry garbage-collect /etc/docker/registry/config.yml"
+# # you should put your username and password in registry-dockerio.yml proxy.username and proxy.password
+#   registry-dockerio:
+#     container_name: registry-dockerio
+#     restart: unless-stopped
+#     hostname: registry-dockerio  
+#     image: registry:2.8.3
+#     ports:
+#       - 5001:5000
+#     volumes:
+#       - ./data/registry-dockerio/data:/var/lib/registry 
+#       - ./data/registry-dockerio/certs:/certs
+#       - ./.htpasswd:/etc/docker/registry/.htpasswd:ro
+#       - ./registry-dockerio.yml:/etc/docker/registry/config.yml:ro
+#     environment:
+#       - TZ=Europe/Moscow
+#       - REGISTRY_STORAGE_DELETE_ENABLED=true
+#       - REGISTRY_AUTH=htpasswd
+#       - REGISTRY_AUTH_HTPASSWD_PATH=/etc/docker/registry/.htpasswd
+#       - REGISTRY_AUTH_HTPASSWD_REALM=Registry Realm
+#       # - REGISTRY_HTTP_TLS_CERTIFICATE=/certs/domain.crt
+#       # - REGISTRY_HTTP_TLS_KEY=/certs/domain.key
+#     networks:
+#       - gitlab_network
+#     healthcheck:
+#       test: curl --fail http://registry-dockerio:5000 || exit 1
+#       interval: 10s
+#       timeout: 3s
+#       retries: 10 
+
+  sonarqube:
+    image: sonarqube:9.9.6-community #user password  admin:admin
+    hostname: sonarqube
+    container_name: sonarqube
+    depends_on:
+      - postgresql
     environment:
-      - TZ=Europe/Moscow
-      - REGISTRY_STORAGE_DELETE_ENABLED=true
-      - REGISTRY_AUTH=htpasswd
-      - REGISTRY_AUTH_HTPASSWD_PATH=/etc/docker/registry/.htpasswd
-      - REGISTRY_AUTH_HTPASSWD_REALM=Registry Realm
-      # - REGISTRY_HTTP_TLS_CERTIFICATE=/certs/domain.crt
-      # - REGISTRY_HTTP_TLS_KEY=/certs/domain.key
+      SONAR_SEARCH_JAVAADDITIONALOPTS: -Ddiscovery.type='single-node' -Dnode.store.allow_mmap=false -Dsonar.login=admin -Dsonar.password=admin
+      SONAR_JDBC_URL: jdbc:postgresql://postgresql:5432/sonarqube
+      SONAR_JDBC_USERNAME: sonarqube
+      SONAR_JDBC_PASSWORD: sonarqube
+    volumes:
+      - ./data/sonarqube/data:/opt/sonarqube/data
+      - ./data/sonarqube/extensions:/opt/sonarqube/extensions
+      - ./data/sonarqube/logs:/opt/sonarqube/logs
+    ports:
+      - "9000:9000"
     networks:
-      - gitlab_network
-    healthcheck:
-      test: curl --fail http://registry-dockerio:5000 || exit 1
-      interval: 10s
-      timeout: 3s
-      retries: 10 
+      - gitlab_network  
+
+  postgresql:
+    image: postgres:16.4-alpine
+    hostname: postgresql
+    container_name: postgresql
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"  
+    volumes:
+      - ./data/postgresql:/var/lib/postgresql/data
+      - ./postgresql.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - gitlab_network  
+
+  # pgadmin:
+  #   container_name: pgadmin
+  #   hostname: pgadmin
+  #   image: dpage/pgadmin4:8.11.0
+  #   environment:
+  #     PGADMIN_DEFAULT_EMAIL: pgadmin@pgadmin.com
+  #     PGADMIN_DEFAULT_PASSWORD: pgadmin
+  #   ports:
+  #     - "5050:80"
+  #   volumes:
+  #     - ./data/pgadmin:/var/lib/pgadmin
+  #   networks:
+  #     - gitlab_network   
+  #   depends_on:
+  #     - postgresql  
 
   vault:
-    image: vault:1.13.3 # s.q1gaeWuVqxtqL2KBC4SMBEbW  uQ6OZvYqlgecKqHjpMOM1tYMurdgoSF4Nc/PydxUZiA=
+    image: vault:1.13.3
     container_name: vault
     hostname: vault
     ports:
@@ -257,3 +359,59 @@ services:
       - gitlab_network  
     depends_on:
       - consul
+
+  # watchtower:
+  #   image: containrrr/watchtower:1.7.1
+  #   container_name: watchtower
+  #   restart: unless-stopped
+  #   env_file:
+  #     - path: ./.env
+  #       required: true # default
+  #     - path: ./.env.override
+  #       required: false  
+  #   environment:
+  #     # WATCHTOWER_POLL_INTERVAL: 21600
+  #     TZ: Europe/Moscow
+  #     WATCHTOWER_SCHEDULE: "0 0 4 * * *"
+  #     WATCHTOWER_CLEANUP: true
+  #     WATCHTOWER_REMOVE_VOLUMES: "false"
+  #     WATCHTOWER_INCLUDE_STOPPED: "true"
+  #     WATCHTOWER_INCLUDE_RESTARTING: "true"
+  #     WATCHTOWER_MONITOR_ONLY: 'false'
+  #     WATCHTOWER_LIFECYCLE_HOOKS: "true"
+  #     WATCHTOWER_HTTP_API_METRICS: "true"
+  #     WATCHTOWER_HTTP_API_TOKEN: "demotoken"
+  #     WATCHTOWER_HTTP_API_UPDATE: "true"
+  #     WATCHTOWER_ROLLING_RESTART: "true"
+  #     WATCHTOWER_NOTIFICATIONS: shoutrrr
+  #     WATCHTOWER_DEBUG: "true"
+  #     WATCHTOWER_NOTIFICATION_REPORT: "true"
+  #     WATCHTOWER_NOTIFICATION_URL: $WATCHTOWER_TELEGRAM_URL
+  #     #"telegram://$telegrambottoken@telegram/?channels=$telegramchatid"
+  #   command: --debug  --http-api-update
+  #   ports:
+  #     - 8088:8080
+  #   networks:
+  #     - gitlab_network    
+  #   volumes:
+  #     - ${SOCK_PATH:-/var/run/docker.sock}:/var/run/docker.sock
+  #     # - "${PRIMARY_MOUNT}/watchtower/config/:/config"
+  #     # - "${PRIMARY_MOUNT}/watchtower/docker-config.json:/config.json"
+    
+  # whatsupdocker:
+  #   image: fmartinou/whats-up-docker:6.4.1
+  #   container_name: whatsupdocker
+  #   environment:
+  #     - WUD_TRIGGER_TELEGRAM_1_BOTTOKEN=$telegrambottoken
+  #     - WUD_TRIGGER_TELEGRAM_1_CHATID=$telegramchatid
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - ./data/whatsupdocker:/store
+  #   ports:
+  #     - 3200:3000
+  #   restart: unless-stopped
+  #   networks:
+  #     - gitlab_network  
+
+
+
